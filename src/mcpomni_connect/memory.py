@@ -840,12 +840,40 @@ class DatabaseSessionMemory:
             self.session_id = session.id
             logger.debug(f"Created database session: {self.session_id}")
 
-    async def store_message(self, role: str, content: str, metadata: dict = None):
-        """Store a message in the database with session management."""
+    async def store_message(self, agent_name: str = None, role: str = None, content: str = None, metadata: dict = None, chat_id: str = None):
+        """Store a message in the database with session management.
+        
+        Compatible with both old signature (role, content, metadata) and new signature (agent_name, role, content, metadata, chat_id).
+        """
+        # Handle different call signatures for backward compatibility
+        if agent_name is not None and role is not None and content is not None:
+            # New signature: (agent_name, role, content, metadata, chat_id)
+            actual_agent_name = agent_name
+            actual_role = role
+            actual_content = content
+        elif isinstance(agent_name, str) and role is not None and content is not None:
+            # Could be old signature: (role, content, metadata) where agent_name is actually role
+            if metadata is None and chat_id is None:
+                # Likely old signature
+                actual_agent_name = "default"
+                actual_role = agent_name
+                actual_content = role
+                metadata = content if isinstance(content, dict) else {}
+            else:
+                # New signature
+                actual_agent_name = agent_name
+                actual_role = role
+                actual_content = content
+        else:
+            raise ValueError("Invalid arguments to store_message")
+        
         metadata = metadata or {}
+        # Add agent_name to metadata for tracking
+        metadata["agent_name"] = actual_agent_name
+        metadata["chat_id"] = chat_id
         
         if self.debug:
-            logger.info(f"Storing message for client {self.client_id}: {content}")
+            logger.info(f"Storing message for client {self.client_id} (agent: {actual_agent_name}): {actual_content}")
 
         await self._ensure_session()
         
@@ -867,22 +895,22 @@ class DatabaseSessionMemory:
             )
 
        
-        if role.lower() == "user":
-            event_content = self.UserContent(text=content)
-        elif role.lower() in ["assistant", "system"]:
-            event_content = self.AssistantContent(text=content)
+        if actual_role.lower() == "user":
+            event_content = self.UserContent(text=actual_content)
+        elif actual_role.lower() in ["assistant", "system"]:
+            event_content = self.AssistantContent(text=actual_content)
         else:
-            event_content = self.UserContent(text=content)  
+            event_content = self.UserContent(text=actual_content)  
         
         
         event = self.Event(
             invocation_id=f"msg_{time.time()}",
-            author=role,
+            author=actual_role,
             content=event_content,
             actions=self.EventActions(
                 state_delta={
-                    "last_message": content,
-                    "last_role": role,
+                    "last_message": actual_content,
+                    "last_role": actual_role,
                     "message_count": len(session.events) + 1,
                     **metadata
                 }
@@ -893,13 +921,18 @@ class DatabaseSessionMemory:
         await self.db_service.append_event(session, event)
         
         
-        await self.in_memory_short_term_memory.store_message(role, content, metadata)
+        await self.in_memory_short_term_memory.store_message(actual_agent_name, actual_role, actual_content, metadata, chat_id)
         
         
         await self.enforce_short_term_limit()
 
-    async def get_messages(self):
-        """Retrieve messages from the database session."""
+    async def get_messages(self, agent_name: str = None, chat_id: str = None):
+        """Retrieve messages from the database session.
+        
+        Args:
+            agent_name: Optional agent name filter
+            chat_id: Optional chat ID filter
+        """
         await self._ensure_session()
         
        
@@ -923,6 +956,19 @@ class DatabaseSessionMemory:
                 "metadata": event.actions.state_delta if event.actions else {},
                 "timestamp": event.timestamp,
             }
+            
+            # Filter by agent_name if specified
+            if agent_name:
+                msg_agent_name = message["metadata"].get("agent_name")
+                if msg_agent_name != agent_name:
+                    continue
+            
+            # Filter by chat_id if specified
+            if chat_id:
+                msg_chat_id = message["metadata"].get("chat_id")
+                if msg_chat_id != chat_id:
+                    continue
+            
             messages.append(message)
         
         return messages

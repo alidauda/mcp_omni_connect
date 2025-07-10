@@ -7,9 +7,11 @@ programmatically, the same way the CLI does it internally.
 """
 
 import asyncio
+import os
 from mcpomni_connect.memory import DatabaseSessionMemory
 from mcpomni_connect.agents.tool_calling_agent import ToolCallingAgent
 from mcpomni_connect.agents.types import AgentConfig
+from mcpomni_connect.client import Configuration
 from mcpomni_connect.llm import LLMConnection
 
 
@@ -23,15 +25,11 @@ async def example_tool_calling_agent_with_database():
         debug=True
     )
     
-    # 2. Configure your LLM connection
-    llm_config = {
-        "provider": "openai",  # or "groq", "anthropic", etc.
-        "model": "gpt-4o-mini",
-        "temperature": 0.7,
-        "max_tokens": 2000,
-        "max_context_length": 30000
-    }
-    llm_connection = LLMConnection(llm_config)
+    # 2. Configure your LLM connection properly using Configuration class
+    # Make sure you have LLM_API_KEY in your environment or .env file
+    # Also ensure you have a servers_config.json file with LLM configuration
+    config = Configuration()
+    llm_connection = LLMConnection(config)
     
     # 3. Configure agent (same as CLI does)
     agent_config = AgentConfig(
@@ -86,14 +84,9 @@ async def example_react_agent_with_database():
         max_context_tokens=25000
     )
     
-    # Configure LLM for ReAct agent
-    llm_config = {
-        "provider": "groq",  # Example: Groq often used for ReAct
-        "model": "llama-3.1-8b-instant",
-        "temperature": 0.1,
-        "max_tokens": 1500
-    }
-    llm_connection = LLMConnection(llm_config)
+    # Configure LLM properly using Configuration class
+    config = Configuration()
+    llm_connection = LLMConnection(config)
     
     # Configure ReAct agent
     agent_config = AgentConfig(
@@ -143,14 +136,9 @@ async def example_orchestrator_agent_with_database():
         max_context_tokens=40000
     )
     
-    # Configure LLM
-    llm_config = {
-        "provider": "openai",
-        "model": "gpt-4o",  # Orchestrator works best with more capable models
-        "temperature": 0.3,
-        "max_tokens": 3000
-    }
-    llm_connection = LLMConnection(llm_config)
+    # Configure LLM properly using Configuration class
+    config = Configuration()
+    llm_connection = LLMConnection(config)
     
     # Configure orchestrator
     agent_config = AgentConfig(
@@ -233,11 +221,10 @@ async def example_memory_strategies():
 async def example_production_setup():
     """Example showing production-ready setup."""
     
-    import os
-    from decouple import config
+    from decouple import config as env_config
     
     # Production database configuration
-    db_url = config('DATABASE_URL', default='sqlite:///production_mcp.db')
+    db_url = env_config('DATABASE_URL', default='sqlite:///production_mcp.db')
     
     # Initialize with production settings
     db_memory = DatabaseSessionMemory(
@@ -246,21 +233,62 @@ async def example_production_setup():
         debug=False  # Turn off debug in production
     )
     
-    # Production LLM configuration
-    llm_config = {
-        "provider": config('LLM_PROVIDER', default='openai'),
-        "model": config('LLM_MODEL', default='gpt-4o-mini'),
-        "temperature": float(config('LLM_TEMPERATURE', default='0.7')),
-        "max_tokens": int(config('LLM_MAX_TOKENS', default='2000')),
-        "max_context_length": int(config('LLM_MAX_CONTEXT', default='50000'))
-    }
+    # Use the proper Configuration class for production
+    config = Configuration()
+    llm_connection = LLMConnection(config)
     
     print("Production setup configured:")
     print(f"- Database: {db_url}")
-    print(f"- LLM: {llm_config['provider']}/{llm_config['model']}")
+    print(f"- LLM API Key: {'Set' if config.llm_api_key else 'Missing'}")
     print(f"- Max context: {db_memory.max_context_tokens} tokens")
     
-    return db_memory, llm_config
+    return db_memory, llm_connection
+
+
+async def setup_environment():
+    """Setup environment and configuration files if needed."""
+    
+    # Check if LLM_API_KEY is set
+    if not os.getenv("LLM_API_KEY"):
+        print("⚠️  LLM_API_KEY environment variable not found!")
+        print("Please set it in your .env file or environment:")
+        print("export LLM_API_KEY=your_api_key_here")
+        return False
+    
+    # Check if servers_config.json exists
+    import json
+    from pathlib import Path
+    
+    config_path = Path("servers_config.json")
+    if not config_path.exists():
+        print("⚠️  servers_config.json not found. Creating default...")
+        
+        default_config = {
+            "AgentConfig": {
+                "tool_call_timeout": 30,
+                "max_steps": 15,
+                "request_limit": 1000,
+                "total_tokens_limit": 100000,
+            },
+            "LLM": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "temperature": 0.7,
+                "max_tokens": 2000,
+                "max_context_length": 30000,
+                "top_p": 0,
+            },
+            "mcpServers": {
+                # Empty for this example - we're not using MCP servers
+            },
+        }
+        
+        with open(config_path, "w") as f:
+            json.dump(default_config, f, indent=4)
+        
+        print(f"✅ Created {config_path}")
+    
+    return True
 
 
 async def main():
@@ -268,55 +296,70 @@ async def main():
     print("Database Memory + Agent Integration Examples")
     print("=" * 60)
     
-    # Tool Calling Agent
-    print("1. Tool Calling Agent with Database Memory")
-    db_memory1, agent1 = await example_tool_calling_agent_with_database()
+    # Setup environment first
+    if not await setup_environment():
+        print("\n❌ Environment setup failed. Please fix the issues above and try again.")
+        return
     
-    # ReAct Agent  
-    print("\n2. ReAct Agent with Database Memory")
-    db_memory2 = await example_react_agent_with_database()
-    
-    # Orchestrator Agent
-    print("\n3. Orchestrator Agent with Database Memory")
-    db_memory3 = await example_orchestrator_agent_with_database()
-    
-    # Memory strategies
-    print("\n4. Memory Strategies")
-    await example_memory_strategies()
-    
-    # Production setup
-    print("\n5. Production Setup")
-    prod_memory, prod_config = await example_production_setup()
-    
-    print("\n" + "=" * 60)
-    print("Integration Summary:")
-    print("""
-    🔑 KEY POINTS for using database memory without CLI:
-    
-    1. **Replace CLI memory functions**:
-       add_message_to_history=db_memory.store_message
-       message_history=db_memory.get_messages
-    
-    2. **Agent configuration stays the same**:
-       - Same AgentConfig
-       - Same LLMConnection
-       - Same agent.run() calls
-    
-    3. **Automatic persistence**:
-       - All conversations stored in database
-       - Sessions survive application restarts
-       - Full event tracking with metadata
-    
-    4. **Memory strategies work seamlessly**:
-       - db_memory.set_memory_config(mode, value)
-       - token_budget or sliding_window
-       - Enforced automatically
-    
-    5. **Production ready**:
-       - PostgreSQL, MySQL, SQLite support
-       - Configurable via DATABASE_URL
-       - ACID transactions
-    """)
+    try:
+        # Tool Calling Agent
+        print("1. Tool Calling Agent with Database Memory")
+        db_memory1, agent1 = await example_tool_calling_agent_with_database()
+        
+        # ReAct Agent  
+        print("\n2. ReAct Agent with Database Memory")
+        db_memory2 = await example_react_agent_with_database()
+        
+        # Orchestrator Agent
+        print("\n3. Orchestrator Agent with Database Memory")
+        db_memory3 = await example_orchestrator_agent_with_database()
+        
+        # Memory strategies
+        print("\n4. Memory Strategies")
+        await example_memory_strategies()
+        
+        # Production setup
+        print("\n5. Production Setup")
+        prod_memory, prod_llm = await example_production_setup()
+        
+        print("\n" + "=" * 60)
+        print("Integration Summary:")
+        print("""
+        🔑 KEY POINTS for using database memory without CLI:
+        
+        1. **Use Configuration class, not dictionaries**:
+           config = Configuration()  # Loads from environment
+           llm_connection = LLMConnection(config)
+        
+        2. **Required environment variables**:
+           - LLM_API_KEY (your API key)
+           - servers_config.json (LLM configuration)
+        
+        3. **Replace CLI memory functions**:
+           add_message_to_history=db_memory.store_message
+           message_history=db_memory.get_messages
+        
+        4. **Agent configuration stays the same**:
+           - Same AgentConfig
+           - Same agent.run() calls
+        
+        5. **Automatic persistence**:
+           - All conversations stored in database
+           - Sessions survive application restarts
+           - Full event tracking with metadata
+        
+        6. **Memory strategies work seamlessly**:
+           - db_memory.set_memory_config(mode, value)
+           - token_budget or sliding_window
+           - Enforced automatically
+        """)
+        
+    except Exception as e:
+        print(f"\n❌ Error running examples: {e}")
+        print("Make sure you have:")
+        print("1. LLM_API_KEY environment variable set")
+        print("2. servers_config.json file with LLM configuration")
+        print("3. Required dependencies installed")
 
 
 if __name__ == "__main__":
